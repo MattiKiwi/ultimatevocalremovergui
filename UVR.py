@@ -11,7 +11,7 @@ import natsort
 import os
 import pickle
 import psutil
-from pyglet import font as pyglet_font
+from pyglet import font as pfont
 import pyperclip
 import base64
 import queue
@@ -44,11 +44,7 @@ from lib_v5.vr_network.model_param_init import ModelParameters
 from kthread import KThread
 from lib_v5 import spec_utils
 from pathlib  import Path
-from separate import (
-    SeperateDemucs, SeperateMDX, SeperateMDXC, SeperateVR,  # Model-related
-    save_format, clear_gpu_cache,  # Utility functions
-    cuda_available, mps_available, #directml_available,
-)
+from separate import SeperateDemucs, SeperateMDX, SeperateMDXC, SeperateVR, save_format
 from playsound import playsound
 from typing import List
 import onnx
@@ -57,15 +53,6 @@ import sys
 import yaml
 from ml_collections import ConfigDict
 from collections import Counter
-
-# if not is_macos:
-#     import torch_directml
-
-# is_choose_arch = cuda_available and directml_available
-# is_opencl_only = not cuda_available and directml_available
-# is_cuda_only = cuda_available and not directml_available
-
-is_gpu_available = cuda_available or mps_available# or directml_available
 
 # Change the current working directory to the directory
 # this file sits in
@@ -91,7 +78,7 @@ def get_execution_time(function, name):
     time_difference = end - start
     print(f'{name} Execution Time: ', time_difference)
 
-PREVIOUS_PATCH_WIN = 'UVR_Patch_10_6_23_4_27'
+PREVIOUS_PATCH_WIN = 'UVR_Patch_3_31_23_5_5'
 
 is_dnd_compatible = True
 banner_placement = -2
@@ -106,7 +93,7 @@ if OPERATING_SYSTEM=="Darwin":
     right_click_button = '<Button-2>'
     application_extension = ".dmg"
 elif OPERATING_SYSTEM=="Linux":
-    OPEN_FILE_func = lambda input_string:subprocess.Popen(["xdg-open", input_string])
+    OPEN_FILE_func = lambda input_string:subprocess.Popen(["open", input_string])
     dnd_path_check = LINUX_DND_CHECK
     current_patch = PATCH_LINUX
     is_windows = False
@@ -121,7 +108,7 @@ elif OPERATING_SYSTEM=="Windows":
     is_macos = False
     right_click_button = '<Button-3>'
     application_extension = ".exe"
-
+    
 def right_click_release_linux(window, top_win=None):
     if OPERATING_SYSTEM=="Linux":
         root.bind('<Button-1>', lambda e:window.destroy())
@@ -338,15 +325,13 @@ class ModelData():
                  is_get_hash_dir_only=False,
                  is_vocal_split_model=False):
 
-        device_set = root.device_set_var.get()
         self.DENOISER_MODEL = DENOISER_MODEL_PATH
         self.DEVERBER_MODEL = DEVERBER_MODEL_PATH
         self.is_deverb_vocals = root.is_deverb_vocals_var.get() if os.path.isfile(DEVERBER_MODEL_PATH) else False
         self.deverb_vocal_opt = DEVERB_MAPPER[root.deverb_vocal_opt_var.get()]
         self.is_denoise_model = True if root.denoise_option_var.get() == DENOISE_M and os.path.isfile(DENOISER_MODEL_PATH) else False
         self.is_gpu_conversion = 0 if root.is_gpu_conversion_var.get() else -1
-        self.is_normalization = root.is_normalization_var.get()#
-        self.is_use_opencl = False#True if is_opencl_only else root.is_use_opencl_var.get()
+        self.is_normalization = root.is_normalization_var.get()
         self.is_primary_stem_only = root.is_primary_stem_only_var.get()
         self.is_secondary_stem_only = root.is_secondary_stem_only_var.get()
         self.is_denoise = True if not root.denoise_option_var.get() == DENOISE_NONE else False
@@ -369,8 +354,7 @@ class ModelData():
         self.mdx_stem_count = 1
         self.compensate = None
         self.mdx_n_fft_scale_set = None
-        self.wav_type_set = root.wav_type_set#
-        self.device_set = device_set.split(':')[-1].strip() if ':' in device_set else device_set
+        self.wav_type_set = root.wav_type_set
         self.mp3_bit_set = root.mp3_bit_set_var.get()
         self.save_format = root.save_format_var.get()
         self.is_invert_spec = root.is_invert_spec_var.get()#
@@ -1031,7 +1015,7 @@ class ListboxBatchFrame(tk.Frame):
             self.update_displayed_index()
 
     def select_input(self, inputs=None):
-        files = inputs if inputs else root.show_file_dialog(dialoge_type=MULTIPLE_FILE)
+        files = inputs if inputs else filedialog.askopenfilenames()
         for file in files:
             if file not in self.path_list:  # only add file if it's not already in the list
                 basename = os.path.basename(file)
@@ -1295,6 +1279,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         style.configure('TCombobox', selectbackground='#0c0c0c')
         #style.configure('TCheckbutton', indicatorsize=30)
         
+        
         # Calculate window height
         height = self.IMAGE_HEIGHT + self.FILEPATHS_HEIGHT + self.OPTIONS_HEIGHT
         height += self.CONVERSIONBUTTON_HEIGHT + self.COMMAND_HEIGHT + self.PROGRESS_HEIGHT
@@ -1325,7 +1310,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
         #Load Images
         img = ImagePath(BASE_PATH)
-        self.logo_img = img.open_image(path=img.banner_path, size=(width, height))
+        self.logo_img = img.open_image(path=img.banner_path, size=(self.winfo_width(), 9999))
         self.efile_img = img.efile_img
         self.stop_img = img.stop_img
         self.help_img = img.help_img
@@ -1452,7 +1437,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.mdx_hash_MAPPER = load_model_hash_data(MDX_HASH_JSON)
         self.mdx_name_select_MAPPER = load_model_hash_data(MDX_MODEL_NAME_SELECT)
         self.demucs_name_select_MAPPER = load_model_hash_data(DEMUCS_MODEL_NAME_SELECT)
-        self.is_gpu_available = is_gpu_available
+        self.is_gpu_available = torch.cuda.is_available() if not OPERATING_SYSTEM == 'Darwin' else torch.backends.mps.is_available()
         self.is_process_stopped = False
         self.inputs_from_dir = []
         self.iteration = 0
@@ -1500,8 +1485,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.change_state_lambda = None
         self.file_one_sub_var = tk.StringVar(value=FILE_ONE_MAIN_LABEL) 
         self.file_two_sub_var = tk.StringVar(value=FILE_TWO_MAIN_LABEL) 
-        self.cuda_device_list = GPU_DEVICE_NUM_OPTS
-        self.opencl_list = GPU_DEVICE_NUM_OPTS
         
         #Model Update
         self.last_found_ensembles = ENSEMBLE_OPTIONS
@@ -1528,7 +1511,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.check_dual_paths()
         if not is_windows:
             self.update_idletasks()
-        self.fill_gpu_list()
         self.online_data_refresh(user_refresh=False, is_start_up=True)
         
     # Menu Functions
@@ -1552,12 +1534,12 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         if chosen_font_name:
             gui_data.sv_ttk.set_theme("dark", chosen_font_name, 10)
             if chosen_font_file:
-                pyglet_font.add_file(chosen_font_file)
+                pfont.add_file(chosen_font_file)
             self.font_set = Font(family=chosen_font_name, size=FONT_SIZE_F2)
             self.font_entry = Font(family=chosen_font_name, size=FONT_SIZE_F2)
         else:
-            pyglet_font.add_file(FONT_MAPPER[MAIN_FONT_NAME])
-            pyglet_font.add_file(FONT_MAPPER[SEC_FONT_NAME])
+            pfont.add_file(FONT_MAPPER[MAIN_FONT_NAME])
+            pfont.add_file(FONT_MAPPER[SEC_FONT_NAME])
             gui_data.sv_ttk.set_theme("dark", MAIN_FONT_NAME, 10)
             self.font_set = Font(family=SEC_FONT_NAME, size=FONT_SIZE_F2)
             self.font_entry = Font(family=MAIN_FONT_NAME, size=FONT_SIZE_F2)
@@ -1663,6 +1645,16 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
          # Select Music Files Option
         self.console_Frame = tk.Frame(master=self, highlightbackground='#101012', highlightcolor='#101012', highlightthicknes=2)
+        self.console_Frame.place(x=X_CONSOLE_FRAME_1080P, y=Y_OFFSET_CONSOLE_FRAME_1080P, width=WIDTH_CONSOLE_FRAME_1080P, height=HEIGHT_CONSOLE_FRAME_1080P,
+                                relx=0, rely=0, relwidth=1, relheight=0)
+
+
+        self.progressbar = ttk.Progressbar(master=self, variable=self.progress_bar_main_var)
+        self.progressbar.place(x=25, y=self.IMAGE_HEIGHT + self.FILEPATHS_HEIGHT + self.OPTIONS_HEIGHT + self.CONVERSIONBUTTON_HEIGHT + self.COMMAND_HEIGHT + self.PADDING*4, width=-50, height=self.PROGRESS_HEIGHT,
+                            relx=0, rely=0, relwidth=1, relheight=0)
+
+         # Select Music Files Option
+        self.console_Frame = tk.Frame(master=self, highlightbackground='#101012', highlightcolor='#101012', highlightthicknes=2)
         self.console_Frame.place(x=15, y=self.IMAGE_HEIGHT + self.FILEPATHS_HEIGHT + self.OPTIONS_HEIGHT + self.CONVERSIONBUTTON_HEIGHT + self.PADDING + 5 *3, width=-30, height=self.COMMAND_HEIGHT+7,
                                 relx=0, rely=0, relwidth=1, relheight=0)
 
@@ -1682,8 +1674,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.filePaths_musicFile_Button.place(x=MUSICFILE_BUTTON_X, y=MUSICFILE_BUTTON_Y, width=MUSICFILE_BUTTON_WIDTH, height=MUSICFILE_BUTTON_HEIGHT, relx=0, rely=0, relwidth=0.3, relheight=0.5)
         self.filePaths_musicFile_Entry = ttk.Entry(master=self.filePaths_Frame, textvariable=self.inputPathsEntry_var, font=self.font_entry, state=tk.DISABLED)
         self.filePaths_musicFile_Entry.place(x=MUSICFILE_ENTRY_X, y=MUSICFILE_BUTTON_Y, width=MUSICFILE_ENTRY_WIDTH, height=MUSICFILE_ENTRY_HEIGHT, relx=0.3, rely=0, relwidth=0.7, relheight=0.5)                                   
-        self.filePaths_musicFile_Open = ttk.Button(master=self.filePaths_Frame, image=self.efile_img, command=lambda:OPEN_FILE_func(os.path.dirname(self.inputPaths[0])) if self.inputPaths and os.path.isdir(os.path.dirname(self.inputPaths[0])) else self.error_dialoge(INVALID_INPUT))
-        self.filePaths_musicFile_Open.place(x=OPEN_BUTTON_X, y=MUSICFILE_BUTTON_Y, width=OPEN_BUTTON_WIDTH, height=MUSICFILE_ENTRY_HEIGHT, relx=0.3, rely=0, relwidth=0.7, relheight=0.5)   
+        self.filePaths_musicFile_Open = ttk.Button(master=self, image=self.efile_img, command=lambda:OPEN_FILE_func(os.path.dirname(self.inputPaths[0])) if self.inputPaths and os.path.isdir(os.path.dirname(self.inputPaths[0])) else self.error_dialoge(INVALID_INPUT))
+        self.filePaths_musicFile_Open.place(x=MUSICFILE_OPEN_X, y=MUSICFILE_OPEN_Y, width=MUSICFILE_OPEN_WIDTH, height=MUSICFILE_OPEN_HEIGHT, relx=1, rely=0, relwidth=0, relheight=0)
 
         # Add any additional configurations or method calls here
         self.filePaths_musicFile_Entry.configure(cursor="hand2")
@@ -1696,8 +1688,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.filePaths_saveTo_Button.place(x=SAVETO_BUTTON_X, y=SAVETO_BUTTON_Y, width=SAVETO_BUTTON_WIDTH, height=SAVETO_BUTTON_HEIGHT, relx=0, rely=0.5, relwidth=0.3, relheight=0.5)
         self.filePaths_saveTo_Entry = ttk.Entry(master=self.filePaths_Frame, textvariable=self.export_path_var, font=self.font_entry, state=tk.DISABLED)
         self.filePaths_saveTo_Entry.place(x=SAVETO_ENTRY_X, y=SAVETO_BUTTON_Y, width=SAVETO_ENTRY_WIDTH, height=SAVETO_ENTRY_HEIGHT, relx=0.3, rely=0.5, relwidth=0.7, relheight=0.5)
-        self.filePaths_saveTo_Open = ttk.Button(master=self.filePaths_Frame, image=self.efile_img, command=lambda:OPEN_FILE_func(Path(self.export_path_var.get())) if os.path.isdir(self.export_path_var.get()) else self.error_dialoge(INVALID_EXPORT))
-        self.filePaths_saveTo_Open.place(x=OPEN_BUTTON_X, y=SAVETO_BUTTON_Y, width=OPEN_BUTTON_WIDTH, height=SAVETO_ENTRY_HEIGHT, relx=0.3, rely=0.5, relwidth=0.7, relheight=0.5)
+        self.filePaths_saveTo_Open = ttk.Button(master=self, image=self.efile_img, command=lambda:OPEN_FILE_func(Path(self.export_path_var.get())) if os.path.isdir(self.export_path_var.get()) else self.error_dialoge(INVALID_EXPORT))
+        self.filePaths_saveTo_Open.place(x=SAVETO_OPEN_X, y=SAVETO_OPEN_Y, width=SAVETO_OPEN_WIDTH, height=SAVETO_OPEN_HEIGHT, relx=1, rely=0, relwidth=0, relheight=0)
         self.help_hints(self.filePaths_saveTo_Button, text=OUTPUT_FOLDER_ENTRY_HELP) 
         self.help_hints(self.filePaths_saveTo_Open, text=OUTPUT_FOLDER_BUTTON_HELP)     
 
@@ -1748,7 +1740,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.help_hints(self.mdx_net_model_Label, text=CHOOSE_MODEL_HELP)
         
         # MDX-Overlap
-        self.overlap_mdx_Label = self.main_window_LABEL_SET(self.options_Frame, 'OVERLAP')
+        self.overlap_mdx_Label = self.main_window_LABEL_SET(self.options_Frame, OVERLAP_TEXT)
         self.overlap_mdx_Label_place = lambda:self.overlap_mdx_Label.place(x=MAIN_ROW_2_X[0], y=MAIN_ROW_2_Y[0], width=0, height=LABEL_HEIGHT, relx=2/3, rely=2/self.COL1_ROWS, relwidth=1/3, relheight=1/self.COL2_ROWS)
         self.overlap_mdx_Option = ComboBoxEditableMenu(self.options_Frame, values=MDX_OVERLAP, width=MENU_COMBOBOX_WIDTH, textvariable=self.overlap_mdx_var, pattern=REG_OVERLAP, default=MDX_OVERLAP)
         self.overlap_mdx_Option_place = lambda:self.overlap_mdx_Option.place(x=MAIN_ROW_2_X[1], y=MAIN_ROW_2_Y[1], width=MAIN_ROW_WIDTH, height=OPTION_HEIGHT, relx=2/3, rely=3/self.COL1_ROWS, relwidth=1/3, relheight=1/self.COL2_ROWS)
@@ -2120,63 +2112,11 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.fileTwo_Entry.bind('<Button-1>', lambda e:self.menu_batch_dual())
         self.fileOne_Entry.bind(right_click_button, lambda e:self.input_dual_right_click_menu(e, is_primary=True))
         self.fileTwo_Entry.bind(right_click_button, lambda e:self.input_dual_right_click_menu(e, is_primary=False))
-        if not is_macos:
+        if is_windows:
             self.bind("<Configure>", self.adjust_toplevel_positions)
         
-    def auto_save(self):
-        try:
-            self.save_values(app_close=False, is_auto_save=True)
-        except Exception as e:
-            print(e)
-
     #--Input/Export Methods--
     
-    def linux_filebox_fix(self, is_on=True):
-        fg_color_set = '#575757' if is_on else "#F6F6F7"
-        style = ttk.Style(self)
-        style.configure('TButton', foreground='#F6F6F7')
-        style.configure('TCheckbutton', foreground='#F6F6F7')
-        style.configure('TCombobox', foreground='#F6F6F7')
-        style.configure('TEntry', foreground='#F6F6F7')
-        style.configure('TLabel', foreground='#F6F6F7')
-        style.configure('TMenubutton', foreground='#F6F6F7')
-        style.configure('TRadiobutton', foreground='#F6F6F7')
-        gui_data.sv_ttk.set_theme("dark", MAIN_FONT_NAME, 10, fg_color_set=fg_color_set)
-
-    def show_file_dialog(self, text='Select Audio files', dialoge_type=None):
-        parent_win = root
-        is_linux = not is_windows and not is_macos
-        
-        if is_linux:
-            self.linux_filebox_fix()
-            top = tk.Toplevel(root)
-            top.withdraw()
-            top.protocol("WM_DELETE_WINDOW", lambda: None)
-            parent_win = top
-        
-        if dialoge_type == MULTIPLE_FILE:
-            filenames = filedialog.askopenfilenames(parent=parent_win, 
-                                                    title=text)
-        elif dialoge_type == MAIN_MULTIPLE_FILE:
-            filenames = filedialog.askopenfilenames(parent=parent_win, 
-                                                    title=text,
-                                                    initialfile='',
-                                                    initialdir=self.lastDir)
-        elif dialoge_type == SINGLE_FILE:
-            filenames = filedialog.askopenfilename(parent=parent_win, 
-                                                   title=text)
-        elif dialoge_type == CHOOSE_EXPORT_FIR:
-            filenames = filedialog.askdirectory(
-                                    parent=parent_win,
-                                    title=f'Select Folder',)
-            
-        if is_linux:
-            print("Is Linux")
-            self.linux_filebox_fix(False)
-            top.destroy()
-            
-        return filenames
-
     def input_select_filedialog(self):
         """Make user select music files"""
 
@@ -2184,8 +2124,12 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             if not os.path.isdir(self.lastDir):
                 self.lastDir = None
 
-        paths = self.show_file_dialog(dialoge_type=MAIN_MULTIPLE_FILE)
-
+        paths = filedialog.askopenfilenames(
+            parent=root,
+            title=f'Select Audio Files',
+            initialfile='',
+            initialdir=self.lastDir)
+        
         if paths:  # Path selected
             self.inputPaths = paths
             
@@ -2197,7 +2141,9 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
         export_path = None
         
-        path = self.show_file_dialog(dialoge_type=CHOOSE_EXPORT_FIR)
+        path = filedialog.askdirectory(
+            parent=root,
+            title=f'Select Folder',)
 
         if path:  # Path selected
             self.export_path_var.set(path)
@@ -2232,7 +2178,9 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         file_path_var, file_basename_var, file_path_2_var, file_basename_2_var = vars[is_primary]
             
         if not path:
-            path = self.show_file_dialog(text='Select Audio file', dialoge_type=SINGLE_FILE)
+            path = filedialog.askopenfilename(
+                parent=root,
+                title=f'Select Audiofile',)
 
         if path:  # Path selected
             file_path_var.set(path)
@@ -2419,7 +2367,16 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.vr_cache_source_mapper = {}
         self.mdx_cache_source_mapper = {}
         self.demucs_cache_source_mapper = {}
-
+      
+    def cached_model_source_holder(self, process_method, sources, model_name=None):
+        
+        if process_method == VR_ARCH_TYPE:
+            self.vr_cache_source_mapper = {**self.vr_cache_source_mapper, **{model_name: sources}}
+        if process_method == MDX_ARCH_TYPE:
+            self.mdx_cache_source_mapper = {**self.mdx_cache_source_mapper, **{model_name: sources}}
+        if process_method == DEMUCS_ARCH_TYPE:
+            self.demucs_cache_source_mapper = {**self.demucs_cache_source_mapper, **{model_name: sources}}
+                             
     def cached_source_callback(self, process_method, model_name=None):
         
         model, sources = None, None
@@ -2437,15 +2394,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                 sources = value
         
         return model, sources
-
-    def cached_model_source_holder(self, process_method, sources, model_name=None):
-        
-        if process_method == VR_ARCH_TYPE:
-            self.vr_cache_source_mapper = {**self.vr_cache_source_mapper, **{model_name: sources}}
-        if process_method == MDX_ARCH_TYPE:
-            self.mdx_cache_source_mapper = {**self.mdx_cache_source_mapper, **{model_name: sources}}
-        if process_method == DEMUCS_ARCH_TYPE:
-            self.demucs_cache_source_mapper = {**self.demucs_cache_source_mapper, **{model_name: sources}}
   
     def cached_source_model_list_check(self, model_list: List[ModelData]):
 
@@ -2675,7 +2623,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         window.resizable(False, False)
         window.wm_transient(top_window)
         window.title(title)
-        window.iconbitmap(ICON_IMG_PATH) if is_windows else self.tk.call('wm', 'iconphoto', window._w, tk.PhotoImage(file=MAIN_ICON_IMG_PATH))
+        window.iconbitmap(ICON_IMG_PATH if is_windows else None)
         
         root_location_x = root.winfo_x()
         root_location_y = root.winfo_y()
@@ -2691,7 +2639,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         window.deiconify()
         window.configure(bg=BG_COLOR)
 
-        if not is_macos:
+        if is_windows:
             self.toplevels.append(window)
         
         def right_click_menu(event):
@@ -3079,7 +3027,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
             try:
                 right_click_menu.tk_popup(event.x_root,event.y_root)
-                right_click_release_linux(right_click_menu, menu_batch_dual_top)
+                right_click_release_linux(right_click_menu)
             finally:
                 right_click_menu.grab_release()
        
@@ -3168,30 +3116,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             
         return self.DualBatch_inputPaths
 
-    def fill_gpu_list(self):
-        try:
-            if cuda_available:
-                self.cuda_device_list = [f"{torch.cuda.get_device_properties(i).name}:{i}" for i in range(torch.cuda.device_count())]
-                self.cuda_device_list.insert(0, DEFAULT)
-                #print(self.cuda_device_list)
-            
-            # if directml_available:
-            #     self.opencl_list = [f"{torch_directml.device_name(i)}:{i}" for i in range(torch_directml.device_count())]
-            #     self.opencl_list.insert(0, DEFAULT)
-        except Exception as e:
-            print(e)
-            
-        # if is_cuda_only:
-        #     self.is_use_opencl_var.set(False)
-            
-        check_gpu_list = self.cuda_device_list#self.opencl_list if is_opencl_only or self.is_use_opencl_var.get() else self.cuda_device_list
-        if not self.device_set_var.get() in check_gpu_list:
-            self.device_set_var.set(DEFAULT)
-
-    def loop_gpu_list(self, option_menu:ComboBoxMenu, menu_name, option_list):
-        option_menu['values'] = option_list
-        option_menu.update_dropdown_size(option_list, menu_name)
-
     def menu_settings(self, select_tab_2=False, select_tab_3=False):#**
         """Open Settings and Download Center"""
 
@@ -3245,7 +3169,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         select_Label = self.menu_sub_LABEL_SET(settings_menu_main_Frame, ADDITIONAL_MENUS_INFORMATION_TEXT)
         select_Label.grid(pady=MENU_PADDING_1)
         
-        select_Option = ComboBoxMenu(settings_menu_main_Frame, textvariable=self.main_menu_var, values=OPTION_LIST, width=GEN_SETTINGS_WIDTH+3)
+        select_Option = ComboBoxMenu(settings_menu_main_Frame, textvariable=self.main_menu_var, values=OPTION_LIST, width=GEN_SETTINGS_WIDTH+(3 if is_windows else 3))
         select_Option.update_dropdown_size(OPTION_LIST, 'menuchoose', command=lambda e:(self.check_is_menu_open(self.main_menu_var.get()), close_window()))
         select_Option.grid(pady=MENU_PADDING_1)
         
@@ -3266,7 +3190,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         delete_your_settings_Label.grid(pady=MENU_PADDING_2)
         self.help_hints(delete_your_settings_Label, text=DELETE_YOUR_SETTINGS_HELP)
         
-        delete_your_settings_Option = ComboBoxMenu(settings_menu_main_Frame, textvariable=option_var, width=GEN_SETTINGS_WIDTH+3)
+        delete_your_settings_Option = ComboBoxMenu(settings_menu_main_Frame, textvariable=option_var, width=GEN_SETTINGS_WIDTH+(3 if is_windows else 3))
         delete_your_settings_Option.grid(padx=20,pady=MENU_PADDING_1)
         self.deletion_list_fill(delete_your_settings_Option, option_var, SETTINGS_CACHE_DIR, SELECT_SAVED_SETTING, menu_name='deletesetting')
 
@@ -3276,7 +3200,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.app_update_button = ttk.Button(settings_menu_main_Frame, textvariable=self.app_update_button_Text_var, width=SETTINGS_BUT_WIDTH-2, command=lambda:self.pop_up_update_confirmation())
         self.app_update_button.grid(pady=MENU_PADDING_1)
         
-        self.app_update_status_Label = tk.Label(settings_menu_main_Frame, textvariable=self.app_update_status_Text_var, padx=3, pady=3, font=(MAIN_FONT_NAME,  f"{FONT_SIZE_4}"), width=UPDATE_LABEL_WIDTH, justify="center", relief="ridge", fg="#13849f")
+        self.app_update_status_Label = tk.Label(settings_menu_main_Frame, textvariable=self.app_update_status_Text_var, font=(MAIN_FONT_NAME,  f"{FONT_SIZE_5}"), width=UPDATE_LABEL_WIDTH, justify="center", relief="ridge", fg="#13849f")
         self.app_update_status_Label.grid(pady=20)
         
         donate_Button = ttk.Button(settings_menu_main_Frame, image=self.donate_img, command=lambda:webbrowser.open_new_tab(DONATE_LINK_BMAC))
@@ -3304,7 +3228,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         
         mp3_bit_set_Option = ComboBoxMenu(settings_menu_format_Frame, textvariable=self.mp3_bit_set_var, values=MP3_BIT_RATES, width=HELP_HINT_CHECKBOX_WIDTH)
         mp3_bit_set_Option.grid(padx=20,pady=MENU_PADDING_1)
-
+        
         audio_format_title_Label = self.menu_title_LABEL_SET(settings_menu_format_Frame, GENERAL_PROCESS_SETTINGS_TEXT)
         audio_format_title_Label.grid(pady=MENU_PADDING_2)
         
@@ -3334,29 +3258,9 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         
         change_model_default_Button = ttk.Button(settings_menu_format_Frame, text=CHANGE_MODEL_DEFAULTS_TEXT, command=lambda:self.pop_up_change_model_defaults(settings_menu), width=SETTINGS_BUT_WIDTH-2)#
         change_model_default_Button.grid(pady=MENU_PADDING_4)
-
-        #if not is_choose_arch:
+        
         self.vocal_splitter_Button_opt(settings_menu, settings_menu_format_Frame, width=SETTINGS_BUT_WIDTH-2, pady=MENU_PADDING_4)
-
-        if not is_macos and self.is_gpu_available:
-            gpu_list_options = lambda:self.loop_gpu_list(device_set_Option, 'gpudevice', self.cuda_device_list)#self.opencl_list if is_opencl_only or self.is_use_opencl_var.get() else self.cuda_device_list)
-            device_set_Label = self.menu_title_LABEL_SET(settings_menu_format_Frame, CUDA_NUM_TEXT)
-            device_set_Label.grid(pady=MENU_PADDING_2)
-            
-            device_set_Option = ComboBoxMenu(settings_menu_format_Frame, textvariable=self.device_set_var, values=GPU_DEVICE_NUM_OPTS, width=GEN_SETTINGS_WIDTH+1)
-            device_set_Option.grid(padx=20,pady=MENU_PADDING_1)
-            gpu_list_options()
-            self.help_hints(device_set_Label, text=IS_CUDA_SELECT_HELP)
-            
-            # if is_choose_arch:
-            #     is_use_opencl_Option = ttk.Checkbutton(settings_menu_format_Frame, 
-            #                                            text=USE_OPENCL_TEXT, 
-            #                                            width=9, 
-            #                                            variable=self.is_use_opencl_var, 
-            #                                            command=lambda:(gpu_list_options(), self.device_set_var.set(DEFAULT))) 
-            #     is_use_opencl_Option.grid()
-            #     self.help_hints(is_use_opencl_Option, text=IS_NORMALIZATION_HELP)
-
+        
         model_sample_mode_Label = self.menu_title_LABEL_SET(settings_menu_format_Frame, MODEL_SAMPLE_MODE_SETTINGS_TEXT)
         model_sample_mode_Label.grid(pady=MENU_PADDING_2)
         
@@ -4004,7 +3908,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         application_change_log_Label = tk.Label(application_change_log_tab_Frame, text='Additional Information', font=(MAIN_FONT_NAME, f"{FONT_SIZE_6}", "bold"), justify="center", fg="#f4f4f4")
         application_change_log_Label.grid(row=0,column=0,padx=0,pady=25)
         
-        application_change_log_Text = tk.Text(application_change_log_tab_Frame, font=(MAIN_FONT_NAME, f"{FONT_SIZE_4}"), fg="white", bg="black", width=72, wrap=tk.WORD, borderwidth=0)
+        application_change_log_Text = tk.Text(application_change_log_tab_Frame, font=(MAIN_FONT_NAME, f"{FONT_SIZE_4}"), fg="white", bg="black", width=72, wrap=tk.WORD if is_windows else tk.CHAR, borderwidth=0)
         application_change_log_Text.grid(row=1,column=0,padx=40 if is_macos else 30,pady=0)
         application_change_log_Text_scroll = ttk.Scrollbar(application_change_log_tab_Frame, orient=tk.VERTICAL)
         application_change_log_Text.config(yscrollcommand=application_change_log_Text_scroll.set)
@@ -4224,8 +4128,10 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                 main_selection = vr_download_list[main_selection]
                 model_dir = VR_MODELS_DIR
             elif MDX_ARCH_TYPE in main_selection or MDX_23_NAME in main_selection:
+                #print(mdx_download_list)
                 if isinstance(mdx_download_list[main_selection], dict):
                     main_selection = mdx_download_list[main_selection]
+                    #print(main_selection)
                     main_selection = list(main_selection.keys())[0]
                 else:
                     main_selection = mdx_download_list[main_selection]
@@ -4897,8 +4803,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         vr_param_Frame = self.menu_FRAME_SET(vr_param_menu)
         vr_param_Frame.grid(row=0, padx=20)  
             
-        vr_param_title_title = self.menu_title_LABEL_SET(vr_param_Frame, SPECIFY_VR_MODEL_PARAMETERS_TEXT)
-        vr_param_title_title.grid()
+        vr_param_title_title = self.menu_title_LABEL_SET(vr_param_Frame, SPECIFY_VR_MODEL_PARAMETERS_TEXT, width=25)
+        vr_param_title_title.grid(row=0,column=0,padx=0,pady=0)
                 
         vr_model_stem_Label = self.menu_sub_LABEL_SET(vr_param_Frame, PRIMARY_STEM_TEXT)
         vr_model_stem_Label.grid(pady=MENU_PADDING_1)    
@@ -4920,6 +4826,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         balance_value_Option = ComboBoxMenu(vr_param_Frame, textvariable=balance_value_var, values=BALANCE_VALUES, width=COMBO_WIDTH)
         balance_value_Option.configure(state=tk.DISABLED)
         balance_value_Option.grid(pady=MENU_PADDING_1)
+        #self.help_hints(balance_value_Label, text=balance_value_HELP)
                 
         is_new_vr_model_Option = ttk.Checkbutton(vr_param_Frame, text=VR_51_MODEL_TEXT, width=SET_MENUS_CHECK_WIDTH, variable=is_new_vr_model_var, command=vr_new_toggle) 
         is_new_vr_model_Option.grid(pady=MENU_PADDING_1)
@@ -5134,6 +5041,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         """Checks for application updates"""
         
         def online_check():
+
             if not is_start_up:
                 self.app_update_status_Text_var.set(LOADING_VERSION_INFO_TEXT)
                 self.app_update_button_Text_var.set(CHECK_FOR_UPDATES_TEXT)
@@ -5194,9 +5102,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                             self.download_update_link_var.set(UPDATE_LINUX_REPO)
                     
                     if not user_refresh:
-                        if not is_beta_version and not self.lastest_version == current_patch:
+                        if not is_beta_version:
                             self.command_Text.write(NEW_UPDATE_FOUND_TEXT(self.lastest_version))
-
 
                 is_update_params = self.is_auto_update_model_params if is_start_up else self.is_auto_update_model_params_var.get()
                 
@@ -5228,9 +5135,9 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             self.current_thread = KThread(target=online_check)
             self.current_thread.setDaemon(True) if not is_windows else None
             self.current_thread.start()
-
+                
     def offline_state_set(self, is_start_up=False):
-        """Changes relevant settings and "Download Center" buttons if no internet connection is available"""
+        """Changes relevent settings and "Download Center" buttons if no internet connection is available"""
         
         if not is_start_up and self.is_menu_settings_open:
             self.app_update_status_Text_var.set(f'Version Status: {NO_CONNECTION}')
@@ -5544,11 +5451,12 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
     def update_loop(self):
         """Update the model dropdown menus"""
-
+            
         if self.clear_cache_torch:
-            clear_gpu_cache()
+            #self.set_app_font(is_chosen_font=True)
+            torch.cuda.empty_cache()
             self.clear_cache_torch = False
-
+            
         if self.is_process_stopped:
             if self.thread_check(self.active_processing_thread):
                 self.conversion_Button_Text_var.set(STOP_PROCESSING)
@@ -5559,9 +5467,9 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                 self.conversion_Button_Text_var.set(START_PROCESSING)
                 self.conversion_Button.configure(state=tk.NORMAL)
                 self.progress_bar_main_var.set(0)
-                clear_gpu_cache()
+                torch.cuda.empty_cache()
                 self.is_process_stopped = False
-            
+
         if self.is_confirm_error_var.get():
             self.check_is_menu_open(ERROR_OPTION)
             self.is_confirm_error_var.set(False)
@@ -5574,8 +5482,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             
             close_process(self.msg_queue)
             self.is_check_splash = False
-
-        #self.auto_save()
 
         self.update_available_models()
         self.after(600, self.update_loop)
@@ -5620,7 +5526,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             
             option_menu['values'] = option_list_option_menu
             option_menu.set(current_selection)
-            option_menu.update_dropdown_size(option_list, model_type)
+            option_menu.update_dropdown_size(model_list, model_type)
             
             if self.is_root_defined_var.get() and model_type == MDX_ARCH_TYPE and self.chosen_process_method_var.get() == MDX_ARCH_TYPE:
                 self.selection_action_models_sub(current_selection, model_type, option_var)
@@ -5666,6 +5572,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
     def update_main_widget_states_mdx(self):
         if not self.mdx_net_model_var.get() == DOWNLOAD_MORE:
             self.update_main_widget_states()
+
 
     def move_widget_offscreen(self, widget, step=10):
         current_x = widget.winfo_x()
@@ -5947,7 +5854,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                     
                 self.update_button_states()
             else:
-                if model_data.is_mdx_c and len(model_data.mdx_model_stems) >= 1:
+                if model_data.is_mdx_c and len(model_data.mdx_model_stems) >= 2:
                     if len(model_data.mdx_model_stems) >= 3:
                         self.mdxnet_stems_Label_place()
                         self.mdxnet_stems_Option_place()
@@ -6216,7 +6123,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.active_processing_thread.start()
 
     def process_button_init(self):
-        self.auto_save()
         self.conversion_Button_Text_var.set(WAIT_PROCESSING)
         self.conversion_Button.configure(state=tk.DISABLED)
         self.command_Text.clear()
@@ -6247,8 +6153,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
     def confirm_stop_process(self):
         """Asks for confirmation before halting active process"""
         
-        self.auto_save()
-
         if self.thread_check(self.active_processing_thread):
             confirm = messagebox.askyesno(parent=root, title=STOP_PROCESS_CONFIRM[0], message=STOP_PROCESS_CONFIRM[1])
 
@@ -6264,7 +6168,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
     def process_end(self, error=None):
         """End of process actions"""
         
-        self.auto_save()
         self.cached_sources_clear()
         self.clear_cache_torch = True
         self.conversion_Button_Text_var.set(START_PROCESSING)
@@ -6314,7 +6217,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             if audio_tool.audio_tool == MATCH_INPUTS:
                 audio_tool.match_inputs(audio_file, audio_file_base, command_Text)
             else:
-                command_Text(f"{PROCESS_STARTING_TEXT}\n")
+                command_Text(PROCESS_STARTING_TEXT)
                 audio_tool.align_inputs(audio_file, audio_file_base, audio_file_2_base, command_Text, set_progress_bar)
             self.progress_bar_main_var.set(base * file_num)
             self.command_Text.write(f"{DONE}\n")
@@ -6349,6 +6252,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
 
         try:
             total_files = len(inputPaths)
+
             if self.chosen_audio_tool_var.get() == TIME_STRETCH:
                 audio_tool = AudioTools(TIME_STRETCH)
                 self.progress_bar_main_var.set(2)
@@ -6662,7 +6566,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
                     if os.path.isfile(audio_file):
                         os.remove(audio_file)
                     
-                clear_gpu_cache()
+                torch.cuda.empty_cache()
                 
             shutil.rmtree(export_path) if is_ensemble and len(os.listdir(export_path)) == 0 else None
 
@@ -6821,8 +6725,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.semitone_shift_var = tk.StringVar(value=data['semitone_shift'])
         self.mp3_bit_set_var = tk.StringVar(value=data['mp3_bit_set'])
         self.save_format_var = tk.StringVar(value=data['save_format'])
-        self.wav_type_set_var = tk.StringVar(value=data['wav_type_set'])#
-        self.device_set_var = tk.StringVar(value=data['device_set'])#
+        self.wav_type_set_var = tk.StringVar(value=data['wav_type_set'])
         self.user_code_var = tk.StringVar(value=data['user_code']) 
         self.is_gpu_conversion_var = tk.BooleanVar(value=data['is_gpu_conversion'])
         self.is_primary_stem_only_var = tk.BooleanVar(value=data['is_primary_stem_only'])
@@ -6834,7 +6737,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.is_accept_any_input_var = tk.BooleanVar(value=data['is_accept_any_input'])
         self.is_task_complete_var = tk.BooleanVar(value=data['is_task_complete'])
         self.is_normalization_var = tk.BooleanVar(value=data['is_normalization'])#
-        self.is_use_opencl_var = tk.BooleanVar(value=False)#True if is_opencl_only else data['is_use_opencl'])#
         self.is_wav_ensemble_var = tk.BooleanVar(value=data['is_wav_ensemble'])#
         self.is_create_model_folder_var = tk.BooleanVar(value=data['is_create_model_folder'])
         self.help_hints_var = tk.BooleanVar(value=data['help_hints_var'])
@@ -6965,8 +6867,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             self.mp3_bit_set_var.set(loaded_setting['mp3_bit_set'])
             self.semitone_shift_var.set(loaded_setting['semitone_shift'])#
             self.save_format_var.set(loaded_setting['save_format'])
-            self.wav_type_set_var.set(loaded_setting['wav_type_set'])#
-            self.device_set_var.set(loaded_setting['device_set'])#
+            self.wav_type_set_var.set(loaded_setting['wav_type_set'])
             self.user_code_var.set(loaded_setting['user_code'])
             self.phase_option_var.set(loaded_setting['phase_option'])#
             self.phase_shifts_var.set(loaded_setting['phase_shifts'])#
@@ -6984,7 +6885,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             
         self.is_gpu_conversion_var.set(loaded_setting['is_gpu_conversion'])
         self.is_normalization_var.set(loaded_setting['is_normalization'])#
-        self.is_use_opencl_var.set(False)#True if is_opencl_only else loaded_setting['is_use_opencl'])#
         self.is_wav_ensemble_var.set(loaded_setting['is_wav_ensemble'])#
         self.help_hints_var.set(loaded_setting['help_hints_var'])
         self.is_wav_ensemble_var.set(loaded_setting['is_wav_ensemble'])
@@ -7000,7 +6900,7 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         self.model_sample_mode_duration_checkbox_var.set(SAMPLE_MODE_CHECKBOX(self.model_sample_mode_duration_var.get()))
         self.model_sample_mode_duration_label_var.set(f'{self.model_sample_mode_duration_var.get()} Seconds')
               
-    def save_values(self, app_close=True, is_restart=False, is_auto_save=False):
+    def save_values(self, app_close=True, is_restart=False):
         """Saves application data"""
 
         # -Save Data-
@@ -7095,14 +6995,12 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             'is_accept_any_input': self.is_accept_any_input_var.get(),
             'is_task_complete': self.is_task_complete_var.get(),
             'is_normalization': self.is_normalization_var.get(),#
-            'is_use_opencl': self.is_use_opencl_var.get(),#
             'is_wav_ensemble': self.is_wav_ensemble_var.get(),#
             'is_create_model_folder': self.is_create_model_folder_var.get(),
             'mp3_bit_set': self.mp3_bit_set_var.get(),
             'semitone_shift': self.semitone_shift_var.get(),#
             'save_format': self.save_format_var.get(),
-            'wav_type_set': self.wav_type_set_var.get(),#
-            'device_set': self.device_set_var.get(),#
+            'wav_type_set': self.wav_type_set_var.get(),
             'user_code': self.user_code_var.get(),
             'help_hints_var': self.help_hints_var.get(),
             'set_vocal_splitter': self.set_vocal_splitter_var.get(),
@@ -7158,8 +7056,6 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
             
             self.destroy()
             
-        elif is_auto_save:
-            save_data(data={**main_settings, **other_data})
         else:
             return {**main_settings, **user_saved_extras}
 

@@ -1,0 +1,108 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+pip-wheel-metadata/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Type checker caches
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Cached bytecode compiled by C extensions
+*.so
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv.bak/
+
+# IDE / editor settings
+.idea/
+.vscode/
+.vs/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+Icon?
+
+# Logs
+*.log
+logs/
+log/
+
+# Downloaded or generated model artifacts
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.weights
+
+# Application output
+UVR_separated/
+
+# User preference / runtime data directories (retain placeholders)
+gui_data/saved_ensembles/*
+!gui_data/saved_ensembles/
+!gui_data/saved_ensembles/saved_ensembles_go_here.txt
+gui_data/saved_settings/*
+!gui_data/saved_settings/
+!gui_data/saved_settings/saved_settings_go_here.txt
+
+# Generated metadata
+ultimatevocalremovergui.egg-info/

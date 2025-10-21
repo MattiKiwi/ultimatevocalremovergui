@@ -26,41 +26,16 @@ import torch
 import warnings
 import pydub
 import soundfile as sf
+import traceback
 import lib_v5.mdxnet as MdxnetSet
 import math
 #import random
+from tqdm import tqdm
 from onnx import load
 from onnx2pytorch import ConvertModel
-import gc
- 
+
 if TYPE_CHECKING:
     from UVR import ModelData
-
-# if not is_macos:
-#     import torch_directml
-
-mps_available = torch.backends.mps.is_available() if is_macos else False
-cuda_available = torch.cuda.is_available()
-
-# def get_gpu_info():
-#     directml_device, directml_available = DIRECTML_DEVICE, False
-    
-#     if not is_macos:
-#         directml_available = torch_directml.is_available()
-
-#         if directml_available:
-#             directml_device = str(torch_directml.device()).partition(":")[0]
-
-#     return directml_device, directml_available
-
-# DIRECTML_DEVICE, directml_available = get_gpu_info()
-
-def clear_gpu_cache():
-    gc.collect()
-    if is_macos:
-        torch.mps.empty_cache()
-    else:
-        torch.cuda.empty_cache()
 
 warnings.filterwarnings("ignore")
 cpu = torch.device('cpu')
@@ -144,7 +119,7 @@ class SeperateAttributes:
         self.main_model_primary = main_model_primary
         self.ensemble_primary_stem = model_data.ensemble_primary_stem
         self.is_multi_stem_ensemble = model_data.is_multi_stem_ensemble
-        self.is_other_gpu = False
+        self.is_gpu = False
         self.is_deverb = True
         self.DENOISER_MODEL = model_data.DENOISER_MODEL
         self.DEVERBER_MODEL = model_data.DEVERBER_MODEL
@@ -164,11 +139,6 @@ class SeperateAttributes:
         self.stem_path_init = os.path.join(self.export_path, f'{self.audio_file_base}_({self.secondary_stem}).wav')
         self.deverb_vocal_opt = model_data.deverb_vocal_opt
         self.is_save_vocal_only = model_data.is_save_vocal_only
-        self.device = cpu
-        self.run_type = ['CPUExecutionProvider']
-        self.is_opencl = False
-        self.device_set = model_data.device_set
-        self.is_use_opencl = model_data.is_use_opencl
         
         if self.is_inst_only_voc_splitter or self.is_sec_bv_rebalance:
             self.is_primary_stem_only = False
@@ -176,21 +146,6 @@ class SeperateAttributes:
         
         if main_model_primary and self.is_multi_stem_ensemble:
             self.primary_stem, self.secondary_stem = main_model_primary, secondary_stem(main_model_primary)
-
-        if self.is_gpu_conversion >= 0:
-            if mps_available:
-                self.device, self.is_other_gpu = 'mps', True
-            else:
-                device_prefix = None
-                if self.device_set != DEFAULT:
-                    device_prefix = CUDA_DEVICE#DIRECTML_DEVICE if self.is_use_opencl and directml_available else CUDA_DEVICE
-
-                # if directml_available and self.is_use_opencl:
-                #     self.device = torch_directml.device() if not device_prefix else f'{device_prefix}:{self.device_set}'
-                #     self.is_other_gpu = True
-                if cuda_available:# and not self.is_use_opencl:
-                    self.device = CUDA_DEVICE if not device_prefix else f'{device_prefix}:{self.device_set}'
-                    self.run_type = ['CUDAExecutionProvider']
 
         if model_data.process_method == MDX_ARCH_TYPE:
             self.is_mdx_ckpt = model_data.is_mdx_ckpt
@@ -217,6 +172,13 @@ class SeperateAttributes:
             self.dim_c = 4
             self.hop = 1024
 
+            if self.is_gpu_conversion >= 0 and torch.cuda.is_available():
+                self.is_gpu = True
+                self.device, self.run_type = torch.device('cuda:0'), ['CUDAExecutionProvider']
+            else:
+                self.is_gpu = False
+                self.device, self.run_type = torch.device('cpu'), ['CPUExecutionProvider']
+                
         if model_data.process_method == DEMUCS_ARCH_TYPE:
             self.demucs_stems = model_data.demucs_stems if not main_process_method in [MDX_ARCH_TYPE, VR_ARCH_TYPE] else None
             self.secondary_model_4_stem = model_data.secondary_model_4_stem
@@ -229,8 +191,7 @@ class SeperateAttributes:
             self.is_demucs_combine_stems = model_data.is_demucs_combine_stems
             self.demucs_stem_count = model_data.demucs_stem_count
             self.pre_proc_model = model_data.pre_proc_model
-            self.device = cpu if self.is_other_gpu and not self.demucs_version in [DEMUCS_V3, DEMUCS_V4] else self.device
-
+            
             self.primary_stem = model_data.ensemble_primary_stem if process_data['is_ensemble_master'] else model_data.primary_stem
             self.secondary_stem = model_data.ensemble_secondary_stem if process_data['is_ensemble_master'] else model_data.secondary_stem
 
@@ -259,6 +220,7 @@ class SeperateAttributes:
             self.primary_model_name, self.primary_sources = self.cached_source_callback(DEMUCS_ARCH_TYPE, model_name=self.model_basename)
 
         if model_data.process_method == VR_ARCH_TYPE:
+            self.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
             self.check_label_secondary_stem_runs()
             self.primary_model_name, self.primary_sources = self.cached_source_callback(VR_ARCH_TYPE, model_name=self.model_basename)
             self.mp = model_data.vr_model_param
@@ -269,7 +231,6 @@ class SeperateAttributes:
             self.batch_size = model_data.batch_size
             self.window_size = model_data.window_size
             self.input_high_end_h = None
-            self.input_high_end = None
             self.post_process_threshold = model_data.post_process_threshold
             self.aggressiveness = {'value': model_data.aggression_setting, 
                                    'split_bin': self.mp.param['band'][1]['crop_stop'], 
@@ -486,16 +447,17 @@ class SeperateMDX(SeperateAttributes):
                 separator = MdxnetSet.ConvTDFNet(**model_params)
                 self.model_run = separator.load_from_checkpoint(self.model_path).to(self.device).eval()
             else:
-                if self.mdx_segment_size == self.dim_t and not self.is_other_gpu:
+                if self.mdx_segment_size == self.dim_t:
                     ort_ = ort.InferenceSession(self.model_path, providers=self.run_type)
                     self.model_run = lambda spek:ort_.run(None, {'input': spek.cpu().numpy()})[0]
                 else:
                     self.model_run = ConvertModel(load(self.model_path))
                     self.model_run.to(self.device).eval()
 
+            self.initialize_model_settings()
             self.running_inference_console_write()
+            self.stft = STFT(self.n_fft, self.hop, self.dim_f)
             mix = prepare_mix(self.audio_file)
-            
             source = self.demix(mix)
             
             if not self.is_vocal_split_model:
@@ -522,8 +484,8 @@ class SeperateMDX(SeperateAttributes):
                 self.primary_source = source.T
                 
             self.primary_source_map = self.final_process(primary_stem_path, self.primary_source, self.secondary_source_primary, self.primary_stem, samplerate)
-        
-        clear_gpu_cache()
+            
+        torch.cuda.empty_cache()
 
         secondary_sources = {**self.primary_source_map, **self.secondary_source_map}
         
@@ -537,11 +499,9 @@ class SeperateMDX(SeperateAttributes):
         self.trim = self.n_fft//2
         self.chunk_size = self.hop * (self.mdx_segment_size-1)
         self.gen_size = self.chunk_size-2*self.trim
-        self.stft = STFT(self.n_fft, self.hop, self.dim_f, self.device)
 
     def demix(self, mix, is_match_mix=False):
-        self.initialize_model_settings()
-        
+
         org_mix = mix
         tar_waves_ = []
 
@@ -586,13 +546,13 @@ class SeperateMDX(SeperateAttributes):
 
             mix_part = torch.tensor([mix_part_], dtype=torch.float32).to(self.device)
             mix_waves = mix_part.split(self.mdx_batch_size)
-            
+
             with torch.no_grad():
                 for mix_wave in mix_waves:
                     self.running_inference_progress_bar(total_chunks, is_match_mix=is_match_mix)
 
                     tar_waves = self.run_model(mix_wave, is_match_mix=is_match_mix)
-                    
+
                     if window is not None:
                         tar_waves[..., :chunk_size_actual] *= window 
                         divider[..., start:end] += window
@@ -600,7 +560,7 @@ class SeperateMDX(SeperateAttributes):
                         divider[..., start:end] += 1
 
                     result[..., start:end] += tar_waves[..., :end-start]
-            
+
         tar_waves = result / divider
         tar_waves_.append(tar_waves)
 
@@ -641,7 +601,7 @@ class SeperateMDXC(SeperateAttributes):
     def seperate(self):
         samplerate = 44100
         sources = None
-
+        
         if self.primary_model_name == self.model_basename and isinstance(self.primary_sources, tuple):
             mix, sources = self.primary_sources
             self.load_cached_sources()
@@ -723,7 +683,7 @@ class SeperateMDXC(SeperateAttributes):
 
                 self.primary_source_map = self.final_process(primary_stem_path, self.primary_source, self.secondary_source_primary, self.primary_stem, samplerate)
 
-        clear_gpu_cache()
+        torch.cuda.empty_cache()
         
         secondary_sources = {**self.primary_source_map, **self.secondary_source_map}
         self.process_vocal_split_chain(secondary_sources)
@@ -736,10 +696,9 @@ class SeperateMDXC(SeperateAttributes):
         org_mix = mix
         if self.is_pitch_change:
             mix, sr_pitched = spec_utils.change_pitch_semitones(mix, 44100, semitone_shift=-self.semitone_shift)
-
-        model = TFC_TDF_net(self.mdx_c_configs, device=self.device)
-        model.load_state_dict(torch.load(self.model_path, map_location=cpu))
-        model.to(self.device).eval()
+        
+        model = TFC_TDF_net(self.mdx_c_configs).eval().to(self.device)
+        model.load_state_dict(torch.load(self.model_path, map_location=self.device))
         mix = torch.tensor(mix, dtype=torch.float32)
 
         try:
@@ -750,37 +709,49 @@ class SeperateMDXC(SeperateAttributes):
         mdx_segment_size = self.mdx_c_configs.inference.dim_t if self.is_mdx_c_seg_def else self.mdx_segment_size
         
         batch_size = self.mdx_batch_size
-        chunk_size = self.mdx_c_configs.audio.hop_length * (mdx_segment_size - 1)
-        overlap = self.overlap_mdx23
+        C = self.mdx_c_configs.audio.hop_length * (mdx_segment_size - 1)
+        N = self.overlap_mdx23
 
-        hop_size = chunk_size // overlap
-        mix_shape = mix.shape[1]
-        pad_size = hop_size - (mix_shape - chunk_size) % hop_size
-        mix = torch.cat([torch.zeros(2, chunk_size - hop_size), mix, torch.zeros(2, pad_size + chunk_size - hop_size)], 1)
+        H = C // N
+        L = mix.shape[1]
+        pad_size = H - (L - C) % H
+        mix = torch.cat([torch.zeros(2, C - H), mix, torch.zeros(2, pad_size + C - H)], 1)
+        mix = mix.to(self.device)
 
-        chunks = mix.unfold(1, chunk_size, hop_size).transpose(0, 1)
-        batches = [chunks[i : i + batch_size] for i in range(0, len(chunks), batch_size)]
-        
-        X = torch.zeros(S, *mix.shape) if S > 1 else torch.zeros_like(mix)
+        chunks = []
+        i = 0
+        while i + C <= mix.shape[1]:
+            chunks.append(mix[:, i:i + C])
+            i += H
+        chunks = torch.stack(chunks)
+
+        batches = []
+        i = 0
+        while i < len(chunks):
+            batches.append(chunks[i:i + batch_size])
+            i = i + batch_size
+
+        X = torch.zeros(S, 2, C - H) if S > 1 else torch.zeros(2, C - H)
         X = X.to(self.device)
 
+        #with torch.cuda.amp.autocast():
         with torch.no_grad():
-            cnt = 0
             for batch in batches:
                 self.running_inference_progress_bar(len(batches))
-                x = model(batch.to(self.device))
-                
+                x = model(batch)
                 for w in x:
-                    X[..., cnt * hop_size : cnt * hop_size + chunk_size] += w
-                    cnt += 1
+                    a = X[..., :-(C - H)]
+                    b = X[..., -(C - H):] + w[..., :(C - H)]
+                    c = w[..., (C - H):]
+                    X = torch.cat([a, b, c], -1)
 
-        estimated_sources = X[..., chunk_size - hop_size:-(pad_size + chunk_size - hop_size)] / overlap
-        del X
+        estimated_sources = X[..., C - H:-(pad_size + C - H)] / N
+
         pitch_fix = lambda s:self.pitch_fix(s, sr_pitched, org_mix)
 
         if S > 1:
             sources = {k: pitch_fix(v) if self.is_pitch_change else v for k, v in zip(self.mdx_c_configs.training.instruments, estimated_sources.cpu().detach().numpy())}
-            del estimated_sources
+            
             if self.is_denoise_model:
                 if VOCAL_STEM in sources.keys() and INST_STEM in sources.keys():
                     sources[VOCAL_STEM] = vr_denoiser(sources[VOCAL_STEM], self.device, model_path=self.DENOISER_MODEL)
@@ -791,7 +762,6 @@ class SeperateMDXC(SeperateAttributes):
             return sources
         else:
             est_s = estimated_sources.cpu().detach().numpy()
-            del estimated_sources
             return pitch_fix(est_s) if self.is_pitch_change else est_s
 
 class SeperateDemucs(SeperateAttributes):
@@ -817,6 +787,11 @@ class SeperateDemucs(SeperateAttributes):
         mix = prepare_mix(self.audio_file)
 
         if is_no_cache:
+            if self.is_gpu_conversion >= 0:
+                self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') 
+            else:
+                self.device = torch.device('cpu')
+            
             if self.demucs_version == DEMUCS_V1:
                 if str(self.model_path).endswith(".gz"):
                     self.model_path = gzip.open(self.model_path, "rb")
@@ -858,7 +833,7 @@ class SeperateDemucs(SeperateAttributes):
             self.write_to_console(DONE, base_text='')
             
             del self.demucs
-            clear_gpu_cache()
+            torch.cuda.empty_cache()
             
         if isinstance(inst_source, np.ndarray):
             source_reshape = spec_utils.reshape_sources(inst_source[self.demucs_source_map[VOCAL_STEM]], source[self.demucs_source_map[VOCAL_STEM]])
@@ -1028,8 +1003,13 @@ class SeperateVR(SeperateAttributes):
             self.load_cached_sources()
         else:
             self.start_inference_console_write()
-
-            device = self.device
+            if self.is_gpu_conversion >= 0:
+                if OPERATING_SYSTEM == 'Darwin':
+                    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+                else:
+                    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') 
+            else:
+                device = torch.device('cpu')
 
             nn_arch_sizes = [
                 31191, # default
@@ -1078,7 +1058,7 @@ class SeperateVR(SeperateAttributes):
             
             self.secondary_source_map = self.final_process(secondary_stem_path, self.secondary_source, self.secondary_source_secondary, self.secondary_stem, 44100)
             
-        clear_gpu_cache()
+        torch.cuda.empty_cache()
         secondary_sources = {**self.primary_source_map, **self.secondary_source_map}
         
         self.process_vocal_split_chain(secondary_sources)
@@ -1198,14 +1178,14 @@ class SeperateVR(SeperateAttributes):
         return y_spec, v_spec
 
     def spec_to_wav(self, spec):
-        if self.high_end_process.startswith('mirroring') and isinstance(self.input_high_end, np.ndarray) and self.input_high_end_h:        
+        if self.high_end_process.startswith('mirroring'):        
             input_high_end_ = spec_utils.mirroring(self.high_end_process, spec, self.input_high_end, self.mp)
             wav = spec_utils.cmb_spectrogram_to_wave(spec, self.mp, self.input_high_end_h, input_high_end_, is_v51_model=self.is_vr_51_model)       
         else:
             wav = spec_utils.cmb_spectrogram_to_wave(spec, self.mp, is_v51_model=self.is_vr_51_model)
             
         return wav
-
+   
 def process_secondary_model(secondary_model: ModelData, 
                             process_data, 
                             main_model_primary_stem_4_stem=None, 
@@ -1359,7 +1339,7 @@ def vr_denoiser(X, device, hop_length=1024, n_fft=2048, cropsize=256, is_deverbe
         nout, nout_lstm = 16, 128
     
     model = nets_new.CascadedNet(n_fft, nout=nout, nout_lstm=nout_lstm)
-    model.load_state_dict(torch.load(model_path, map_location=cpu))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
 
     if mp is None:

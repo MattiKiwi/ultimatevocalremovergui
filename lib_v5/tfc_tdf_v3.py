@@ -3,19 +3,13 @@ import torch.nn as nn
 from functools import partial
 
 class STFT:
-    def __init__(self, n_fft, hop_length, dim_f, device):
+    def __init__(self, n_fft, hop_length, dim_f):
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.window = torch.hann_window(window_length=self.n_fft, periodic=True)
         self.dim_f = dim_f
-        self.device = device
 
     def __call__(self, x):
-        
-        x_is_mps = not x.device.type in ["cuda", "cpu"]
-        if x_is_mps:
-            x = x.cpu()
-
         window = self.window.to(x.device)
         batch_dims = x.shape[:-2]
         c, t = x.shape[-2:]
@@ -23,18 +17,9 @@ class STFT:
         x = torch.stft(x, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=True,return_complex=False)
         x = x.permute([0, 3, 1, 2])
         x = x.reshape([*batch_dims, c, 2, -1, x.shape[-1]]).reshape([*batch_dims, c * 2, -1, x.shape[-1]])
-
-        if x_is_mps:
-            x = x.to(self.device)
-
         return x[..., :self.dim_f, :]
 
     def inverse(self, x):
-        
-        x_is_mps = not x.device.type in ["cuda", "cpu"]
-        if x_is_mps:
-            x = x.cpu()
-
         window = self.window.to(x.device)
         batch_dims = x.shape[:-3]
         c, f, t = x.shape[-3:]
@@ -46,11 +31,8 @@ class STFT:
         x = x[..., 0] + x[..., 1] * 1.j
         x = torch.istft(x, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=True)
         x = x.reshape([*batch_dims, 2, -1])
-
-        if x_is_mps:
-            x = x.to(self.device)
-
         return x
+
 
 def get_norm(norm_type):
     def norm(c, norm_type):
@@ -147,10 +129,9 @@ class TFC_TDF(nn.Module):
 
 
 class TFC_TDF_net(nn.Module):
-    def __init__(self, config, device):
+    def __init__(self, config):
         super().__init__()
         self.config = config
-        self.device = device
 
         norm = get_norm(norm_type=config.model.norm)
         act = get_act(act_type=config.model.act)
@@ -195,7 +176,7 @@ class TFC_TDF_net(nn.Module):
             nn.Conv2d(c, self.num_target_instruments * dim_c, 1, 1, 0, bias=False)
         )
 
-        self.stft = STFT(config.audio.n_fft, config.audio.hop_length, config.audio.dim_f, self.device)
+        self.stft = STFT(config.audio.n_fft, config.audio.hop_length, config.audio.dim_f)
 
     def cac2cws(self, x):
         k = self.num_subbands
