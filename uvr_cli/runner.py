@@ -11,10 +11,10 @@ from typing import Iterable, Sequence
 import urllib.request
 import math
 
-import librosa
 import numpy as np
 import soundfile as sf
 import torch
+from scipy import signal
 
 from lib_v5.tfc_tdf_v3 import STFT
 
@@ -112,7 +112,10 @@ def _load_audio(path: Path, target_sr: int) -> tuple[np.ndarray, int]:
     audio, sr = sf.read(str(path), always_2d=True)
     audio = audio.T.astype(np.float32, copy=False)
     if sr != target_sr:
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr, axis=-1)
+        gcd = math.gcd(sr, target_sr)
+        up = target_sr // gcd
+        down = sr // gcd
+        audio = signal.resample_poly(audio, up, down, axis=-1)
         sr = target_sr
     return _as_stereo(audio), sr
 
